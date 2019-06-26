@@ -1,0 +1,12 @@
+#!/bin/sh
+
+set -e
+
+if [ "$1" = "remove" ]; then
+	SCRSETFILE="/etc/X11/app-defaults/XScreenSaver"
+	if [ -e $SCRSETFILE ] && grep -q Cantab $SCRSETFILE ; then
+		sed $SCRSETFILE -i -e "N;s/\\\n.*Cantab.*\\\n/\\\n/"
+	fi
+fi
+
+exit 0

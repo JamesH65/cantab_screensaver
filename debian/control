@@ -1,0 +1,14 @@
+Source: cantab-screensaver
+Section: utils
+Priority: optional
+Maintainer: Simon Long <simon@raspberrypi.org>
+Build-Depends: debhelper (>= 9.0.0), dh-autoreconf, libraspberrypi-dev [armhf]
+Standards-Version: 3.9.6
+Homepage: https://www.raspberrypi.org/
+
+Package: cantab-screensaver
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, xscreensaver, libraspberrypi0 [armhf], mpv [i386]
+Description: Cambridge video screensaver
+ Video screensaver of Cambridge colleges for use with xscreensaver
+

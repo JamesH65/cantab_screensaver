@@ -1,0 +1,11 @@
+cantab-screensaver (0.2) jessie; urgency=medium
+
+  * Multiple architecture support added
+
+ -- Simon Long <simon@raspberrypi.org>  Mon, 22 May 2017 10:54:44 +0100
+
+cantab-screensaver (0.1) jessie; urgency=medium
+
+  * Initial release
+
+ -- Simon Long <simon@raspberrypi.org>  Thu, 08 Dec 2016 14:50:01 +0000

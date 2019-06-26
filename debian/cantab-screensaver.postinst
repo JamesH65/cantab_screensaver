@@ -1,0 +1,18 @@
+#!/bin/sh
+
+set -e
+
+if [ "$1" = "configure" ]; then
+	SCRSETFILE="/etc/X11/app-defaults/XScreenSaver"
+	if [ -e $SCRSETFILE ] && ! grep -q Cantab $SCRSETFILE ; then
+		sed $SCRSETFILE -i -e "s/\\\n\\\/progtermsymb/"
+        if [ -e /usr/bin/scrvid ] ; then
+            sed $SCRSETFILE -i -e "s/\\\n/\\\n\\\\\n\"Cantab\"\\t\\t\\tscrvid \/usr\/share\/cantab-video\/cantab.h264\\t\\\n/"
+        else
+            sed $SCRSETFILE -i -e "s/\\\n/\\\n\\\\\n\"Cantab\"\\t\\t\\tmpv --fs --fps=30 --really-quiet --no-audio --loop=inf --no-stop-screensaver --wid=\$XSCREENSAVER_WINDOW \/usr\/share\/cantab-video\/cantab.h264\\t\\\n/"
+        fi
+		sed $SCRSETFILE -i -e "s/progtermsymb/\\\n\\\/"
+	fi
+fi
+
+exit 0
