@@ -34,17 +34,27 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "bcm_host.h"
 #include "ilclient.h"
 
-static int video_decode_test(char *filename)
+#define MAX_DISPLAYS 3
+
+#define TUNNEL_DECODE_SCHEDULER    0
+#define TUNNEL_CLOCK_SCHEDULER     1
+#define TUNNEL_SCHEDULER_SPLITTER  2
+#define TUNNEL_SPLITTER_RENDER     3
+
+
+static int video_decode_test(char *filename, int display_id[], int num_displays)
 {
    OMX_VIDEO_PARAM_PORTFORMATTYPE format;
    OMX_TIME_CONFIG_CLOCKSTATETYPE cstate;
-   COMPONENT_T *video_decode = NULL, *video_scheduler = NULL, *video_render = NULL, *clock = NULL;
-   COMPONENT_T *list[5];
-   TUNNEL_T tunnel[4];
+   COMPONENT_T *video_decode = NULL, *video_scheduler = NULL, *video_splitter, *clock = NULL;
+   COMPONENT_T *video_render[MAX_DISPLAYS] = {0};
+   COMPONENT_T *list[4 + MAX_DISPLAYS];
+   TUNNEL_T tunnel[4 + MAX_DISPLAYS];
    ILCLIENT_T *client;
    FILE *in;
    int status = 0;
    unsigned int data_len = 0;
+   int list_idx = 0;
 
    memset(list, 0, sizeof(list));
    memset(tunnel, 0, sizeof(tunnel));
@@ -68,17 +78,26 @@ static int video_decode_test(char *filename)
    // create video_decode
    if(ilclient_create_component(client, &video_decode, "video_decode", ILCLIENT_DISABLE_ALL_PORTS | ILCLIENT_ENABLE_INPUT_BUFFERS) != 0)
       status = -14;
-   list[0] = video_decode;
+   list[list_idx++] = video_decode;
 
-   // create video_render
-   if(status == 0 && ilclient_create_component(client, &video_render, "video_render", ILCLIENT_DISABLE_ALL_PORTS) != 0)
+   // create splitter
+   if(ilclient_create_component(client, &video_splitter, "video_splitter", ILCLIENT_DISABLE_ALL_PORTS) != 0)
       status = -14;
-   list[1] = video_render;
+
+   list[list_idx++] = video_decode;
+
+   // create video_renders
+   for (int i = 0; i < num_displays; i++)
+   {
+      if(status == 0 && ilclient_create_component(client, &video_render[i], "video_render", ILCLIENT_DISABLE_ALL_PORTS) != 0)
+         status = -14;
+      list[list_idx++] = video_render[i];
+   }
 
    // create clock
    if(status == 0 && ilclient_create_component(client, &clock, "clock", ILCLIENT_DISABLE_ALL_PORTS) != 0)
       status = -14;
-   list[2] = clock;
+   list[list_idx++] = clock;
 
    memset(&cstate, 0, sizeof(cstate));
    cstate.nSize = sizeof(cstate);
@@ -91,14 +110,19 @@ static int video_decode_test(char *filename)
    // create video_scheduler
    if(status == 0 && ilclient_create_component(client, &video_scheduler, "video_scheduler", ILCLIENT_DISABLE_ALL_PORTS) != 0)
       status = -14;
-   list[3] = video_scheduler;
+   list[list_idx++] = video_scheduler;
 
-   set_tunnel(tunnel, video_decode, 131, video_scheduler, 10);
-   set_tunnel(tunnel+1, video_scheduler, 11, video_render, 90);
-   set_tunnel(tunnel+2, clock, 80, video_scheduler, 12);
+   set_tunnel(&tunnel[TUNNEL_DECODE_SCHEDULER], video_decode, 131, video_scheduler, 10);
+   set_tunnel(&tunnel[TUNNEL_CLOCK_SCHEDULER], clock, 80, video_scheduler, 12);
+   set_tunnel(&tunnel[TUNNEL_SCHEDULER_SPLITTER], video_scheduler, 11, video_splitter, 250);
+
+   for (int i = 0; i < num_displays; i++)
+   {
+      set_tunnel(&tunnel[TUNNEL_SPLITTER_RENDER + i], video_splitter, 251+i, video_render[i], 90);
+   }
 
    // setup clock tunnel first
-   if(status == 0 && ilclient_setup_tunnel(tunnel+2, 0, 0) != 0)
+   if(status == 0 && ilclient_setup_tunnel(&tunnel[TUNNEL_CLOCK_SCHEDULER], 0, 0) != 0)
       status = -15;
    else
       ilclient_change_component_state(clock, OMX_StateExecuting);
@@ -136,7 +160,7 @@ static int video_decode_test(char *filename)
          {
             port_settings_changed = 1;
 
-            if(ilclient_setup_tunnel(tunnel, 0, 0) != 0)
+            if(ilclient_setup_tunnel(&tunnel[TUNNEL_DECODE_SCHEDULER], 0, 0) != 0)
             {
                status = -7;
                break;
@@ -144,14 +168,34 @@ static int video_decode_test(char *filename)
 
             ilclient_change_component_state(video_scheduler, OMX_StateExecuting);
 
-            // now setup tunnel to video_render
-            if(ilclient_setup_tunnel(tunnel+1, 0, 1000) != 0)
+            if(ilclient_setup_tunnel(&tunnel[TUNNEL_SCHEDULER_SPLITTER], 0, 0) != 0)
             {
-               status = -12;
+               status = -7;
                break;
             }
 
-            ilclient_change_component_state(video_render, OMX_StateExecuting);
+            ilclient_change_component_state(video_splitter, OMX_StateExecuting);
+
+            // now setup tunnel to video_renders
+            for (int i = 0; i < num_displays; i++)
+            {
+               if(ilclient_setup_tunnel(&tunnel[TUNNEL_SPLITTER_RENDER + i], 0, 1000) != 0)
+               {
+                  status = -12;
+                  goto shutdown;
+               }
+
+               ilclient_change_component_state(video_render[i], OMX_StateExecuting);
+
+               OMX_CONFIG_DISPLAYREGIONTYPE region = {0};
+               region.nSize = sizeof(OMX_CONFIG_DISPLAYREGIONTYPE);
+               region.nVersion.nVersion = OMX_VERSION;
+               region.nPortIndex = 90;
+               region.num = display_id[i];
+               region.set = OMX_DISPLAY_SET_NUM;
+               int result = OMX_SetParameter(ILC_GET_HANDLE(video_render[i]), OMX_IndexConfigDisplayRegion, &region);
+            }
+
          }
          if(!data_len)
             fseek (in, 0, SEEK_SET);
@@ -175,26 +219,35 @@ static int video_decode_test(char *filename)
          }
       }
 
+shutdown:
+
       buf->nFilledLen = 0;
       buf->nFlags = OMX_BUFFERFLAG_TIME_UNKNOWN | OMX_BUFFERFLAG_EOS;
 
       if(OMX_EmptyThisBuffer(ILC_GET_HANDLE(video_decode), buf) != OMX_ErrorNone)
          status = -20;
 
-      // wait for EOS from render
-      ilclient_wait_for_event(video_render, OMX_EventBufferFlag, 90, 0, OMX_BUFFERFLAG_EOS, 0,
-                              ILCLIENT_BUFFER_FLAG_EOS, -1);
+      // wait for EOS from renders
+      for (int i = 0; i < num_displays; i++)
+      {
+         ilclient_wait_for_event(video_render[i], OMX_EventBufferFlag, 90, 0, OMX_BUFFERFLAG_EOS, 0,
+                                 ILCLIENT_BUFFER_FLAG_EOS, -1);
+      }
 
       // need to flush the renderer to allow video_decode to disable its input port
       ilclient_flush_tunnels(tunnel, 0);
-
    }
 
    fclose(in);
 
-   ilclient_disable_tunnel(tunnel);
-   ilclient_disable_tunnel(tunnel+1);
-   ilclient_disable_tunnel(tunnel+2);
+   ilclient_disable_tunnel(&tunnel[TUNNEL_DECODE_SCHEDULER]);
+   ilclient_disable_tunnel(&tunnel[TUNNEL_SCHEDULER_SPLITTER]);
+
+   for (int i = 0; i < num_displays; i++)
+   {
+      ilclient_disable_tunnel(&tunnel[TUNNEL_SPLITTER_RENDER+i]);
+   }
+   ilclient_disable_tunnel(&tunnel[TUNNEL_CLOCK_SCHEDULER]);
    ilclient_disable_port_buffers(video_decode, 130, NULL, NULL, NULL);
    ilclient_teardown_tunnels(tunnel);
 
@@ -211,12 +264,24 @@ static int video_decode_test(char *filename)
 
 int main (int argc, char **argv)
 {
-   if (argc < 2 || argc > 2) {
-      printf("Usage: %s <filename>\n", argv[0]);
+   int display_id[MAX_DISPLAYS] = {0};
+   int i;
+
+   if (argc < 2 || argc > MAX_DISPLAYS+2) {
+      printf("Usage: %s <filename> [<displayid 0>..<displayid n>]\n", argv[0]);
       exit(1);
    }
    bcm_host_init();
-   return video_decode_test(argv[1]);
+
+   for (i = 0; i < argc-2 && i < MAX_DISPLAYS;i++)
+   {
+      display_id[i] = atoi(argv[i + 2]);
+   }
+
+   if (!i)
+      i = 1;
+
+   return video_decode_test(argv[1], display_id, i);
 }
 
 
